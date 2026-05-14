@@ -1,3 +1,4 @@
+using Nbt;
 using Serilog;
 using System.Collections.Concurrent;
 using System.IO;
@@ -80,7 +81,7 @@ namespace QuantumMC.World
         }
 
         /// <summary>
-        /// Creates a new world directory and then loads it.
+        /// Creates a new world directory with a default level.dat and then loads it.
         /// </summary>
         public World CreateWorld(string name)
         {
@@ -88,9 +89,43 @@ namespace QuantumMC.World
             if (!Directory.Exists(worldPath))
             {
                 Directory.CreateDirectory(worldPath);
+                WriteLevelDat(worldPath, name);
+                Log.Information("Created new world '{WorldName}' at {Path}", name, worldPath);
             }
             
             return LoadWorld(name);
+        }
+
+        private static void WriteLevelDat(string worldPath, string name)
+        {
+            try
+            {
+                var root = new Nbt.CompoundTag("");
+                root.Add(new Nbt.StringTag("LevelName", name));
+                root.Add(new Nbt.IntTag("SpawnX", 0));
+                root.Add(new Nbt.IntTag("SpawnY", 65));
+                root.Add(new Nbt.IntTag("SpawnZ", 0));
+                root.Add(new Nbt.IntTag("GameType", 0));
+                root.Add(new Nbt.IntTag("StorageVersion", 10));
+
+                using var nbtStream = new MemoryStream();
+                var nbtFile = new Nbt.NbtFile(root);
+                nbtFile.BigEndian = false;
+                nbtFile.SaveToStream(nbtStream, Nbt.NbtCompression.None);
+                byte[] nbtBytes = nbtStream.ToArray();
+
+                // Bedrock level.dat header: 8 bytes (version=8 + size as little-endian int32)
+                using var fs = new FileStream(Path.Combine(worldPath, "level.dat"), FileMode.Create, FileAccess.Write);
+                Span<byte> header = stackalloc byte[8];
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(header, 8);
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(header.Slice(4), nbtBytes.Length);
+                fs.Write(header);
+                fs.Write(nbtBytes);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to write level.dat for world '{WorldName}'", name);
+            }
         }
 
         /// <summary>

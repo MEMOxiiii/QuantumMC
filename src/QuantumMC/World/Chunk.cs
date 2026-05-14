@@ -59,6 +59,11 @@ namespace QuantumMC.World
         }
 
         /// <summary>
+        /// Returns the SubChunk at the given array index (0-based), or null if not created.
+        /// </summary>
+        public SubChunk? GetSubChunk(int arrayIndex) => _subChunks[arrayIndex];
+
+        /// <summary>
         /// Sets a block at absolute world coordinates within this chunk.
         /// X and Z should be 0-15 (local to chunk), Y is absolute (-64 to 319).
         /// </summary>

@@ -13,6 +13,21 @@ namespace QuantumMC.Network.Handler
 {
     public class ResourcePackHandler : PacketHandler
     {
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> _resourceCache = new();
+
+        private static byte[] LoadEmbeddedResource(string name)
+        {
+            return _resourceCache.GetOrAdd(name, n =>
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                using var stream = asm.GetManifestResourceStream(n)
+                    ?? throw new Exception($"Embedded resource '{n}' not found");
+                var buf = new byte[stream.Length];
+                stream.ReadExactly(buf);
+                return buf;
+            });
+        }
+
         public override void Handle(PlayerSession session, uint packetId, byte[] payload)
         {
             var stream = new BinaryStream(payload);
@@ -47,6 +62,7 @@ namespace QuantumMC.Network.Handler
 
         private void HandleCompleted(PlayerSession session)
         {
+            Log.Information("[JOIN] HandleCompleted start for {Username}", session.Username);
             session.State = SessionState.PlayPhase;
 
             var voxelShapes = new VoxelShapesPacket
@@ -56,13 +72,14 @@ namespace QuantumMC.Network.Handler
                 CustomShapeCount = 0
             };
             session.SendPacket(voxelShapes);
+            Log.Information("[JOIN] Sent VoxelShapes");
 
             var startGame = new StartGamePacket
             {
                 EntityUniqueId = session.Player.EntityUniqueId,
                 EntityRuntimeId = session.Player.EntityRuntimeId,
                 PlayerGamemode = session.Player.Gamemode,
-                Position = new Vector3(session.Player.X, session.Player.Y, session.Player.Z),
+                Position = new Vector3(session.Player.X, session.Player.Y + 1.62f, session.Player.Z),
                 Yaw = session.Player.Yaw, Pitch = session.Player.Pitch,
                 Seed = -1,
                 SpawnBiomeType = 0,
@@ -140,36 +157,87 @@ namespace QuantumMC.Network.Handler
             };
 
             session.SendPacket(startGame);
+            Log.Information("[JOIN] Sent StartGame");
 
-            /*var adventureSettings = new AdventureSettingsPacket
-            {
-                Flags = 0,
-                CommandPermission = 1,
-                ActionPermission = 1,
-                PermissionLevel = 1,
-                CustomFlags = 0,
-                EntityUniqueId = session.Player.EntityUniqueId
-            };
-            session.SendPacket(adventureSettings);
+            // Required: Bedrock client waits for both of these after StartGame before it will proceed.
+            session.SendPacket(new BiomeDefinitionListPacket { NbtPayload = LoadEmbeddedResource("biome_definitions.nbt") });
+            session.SendPacket(new AvailableActorIdentifiersPacket { SerialisedEntityIdentifiers = LoadEmbeddedResource("entity_identifiers.nbt") });
+            Log.Information("[JOIN] Sent BiomeDefinitionList + AvailableActorIdentifiers");
+
+            bool isCreative = session.Player.Gamemode == 1;
+
+            // Survival: basic interactions + walk/fly speed values
+            uint survivalValues = (uint)(Ability.Build | Ability.Mine | Ability.DoorsAndSwitches |
+                Ability.OpenContainers | Ability.AttackPlayers | Ability.AttackMobs |
+                Ability.FlySpeed | Ability.WalkSpeed);
+            // Creative: adds mayFly, invulnerable, instant-build, op-cmds, teleport.
+            // NOTE: Ability.Flying (is currently flying) is intentionally omitted so the
+            // player controls fly-toggle via double-jump. VerticalFlySpeed (bit 19) is also
+            // excluded from Abilities so the client uses its own default vertical fly speed.
+            uint creativeValues = survivalValues | (uint)(Ability.MayFly |
+                Ability.Invulnerable | Ability.InstantBuild | Ability.OperatorCommands | Ability.Teleport);
 
             var abilities = new UpdateAbilitiesPacket
             {
-                EntityUniqueId = session.Player.EntityUniqueId,
-                PermissionLevel = 1,
-                CommandPermission = 1,
-                Abilities = new List<AbilityLayer>
+                AbilityData = new AbilityData
                 {
-                    new AbilityLayer
+                    EntityUniqueId = session.Player.EntityUniqueId,
+                    PlayerPermissions = (byte)PermissionLevel.Member,
+                    CommandPermissions = isCreative ? (byte)2 : (byte)0,
+                    Layers = new List<AbilityLayer>
                     {
-                        Type = AbilityLayerType.Base,
-                        AbilitiesSet = 0x3FF,
-                        AbilitiesValue = (uint)(session.Player.Gamemode == 1 ? 0x3FF : 0x0),
-                        FlySpeed = 0.05f,
-                        WalkSpeed = 0.1f
+                        new AbilityLayer
+                        {
+                            Type = (ushort)AbilityLayerType.Base,
+                            // 0x7FFFF = bits 0-18 only; excludes VerticalFlySpeed (bit 19)
+                            // so the client uses its default vertical fly speed in fly mode.
+                            Abilities = 0x7FFFF,
+                            Values = isCreative ? creativeValues : survivalValues,
+                            FlySpeed = 0.05f,
+                            VerticalFlySpeed = 0.05f,
+                            WalkSpeed = 0.1f
+                        }
                     }
                 }
             };
-            session.SendPacket(abilities); TODO: Implement those later*/
+            session.SendPacket(abilities);
+            Log.Information("[JOIN] Sent UpdateAbilities");
+
+            // CreativeContent is required so the client can populate the creative inventory.
+            // Sending an empty payload (0 items) satisfies the protocol requirement.
+            session.SendPacket(new CreativeContentPacket());
+            Log.Information("[JOIN] Sent CreativeContent (empty)");
+
+            // ItemRegistry (0xa2) is required in MC 1.21+ for the client to initialise its
+            // item table. Without it, the client may crash or disconnect during world load.
+            // Sending an empty registry (0 items) satisfies the requirement.
+            session.SendPacket(new ItemRegistryPacket());
+            Log.Information("[JOIN] Sent ItemRegistry (empty)");
+
+            // Send player attributes so the client knows correct movement/health values.
+            // Without minecraft:movement, the client may default to 0 (causes very slow walking).
+            var attrs = new UpdateAttributesPacket
+            {
+                EntityRuntimeId = session.Player.EntityRuntimeId,
+                Attributes = new List<NetworkAttribute>
+                {
+                    new NetworkAttribute
+                    {
+                        Name = "minecraft:health",
+                        Min = 0f, Max = 20f, Value = 20f,
+                        DefaultMin = 0f, DefaultMax = 20f, DefaultValue = 20f
+                    },
+                    new NetworkAttribute
+                    {
+                        Name = "minecraft:movement",
+                        Min = 0f, Max = 1f, Value = 0.1f,
+                        DefaultMin = 0f, DefaultMax = 1f, DefaultValue = 0.1f
+                    }
+                },
+                Tick = 0
+            };
+            session.SendPacket(attrs);
+            Log.Information("[JOIN] HandleCompleted done — join sequence complete");
         }
     }
 }

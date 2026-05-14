@@ -5,7 +5,7 @@ namespace QuantumMC
 {
     public class QuantumMC
     {
-        public static string DataFolder { get; } = AppContext.BaseDirectory;
+        public static string DataFolder { get; } = Directory.GetCurrentDirectory();
 
         public static void Main(string[] args)
         {

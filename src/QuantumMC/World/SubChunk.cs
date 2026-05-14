@@ -12,6 +12,11 @@ namespace QuantumMC.World
         }
 
         /// <summary>
+        /// Returns the underlying PalettedBlockStorage for disk serialization.
+        /// </summary>
+        public BedrockProtocol.Types.PalettedBlockStorage GetStorage() => _storage;
+
+        /// <summary>
         /// Whether this sub-chunk has any non-air blocks.
         /// </summary>
         public bool IsEmpty => _storage.IsEmpty;

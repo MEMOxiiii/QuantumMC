@@ -12,7 +12,7 @@ namespace QuantumMC.World
         /// <summary>
         /// The maximum chunk radius the server will allow.
         /// </summary>
-        public int MaxChunkRadius { get; set; } = 8;
+        public int MaxChunkRadius { get; set; } = 16;
         
         public string Name { get; set; } = "world";
 
@@ -64,15 +64,23 @@ namespace QuantumMC.World
         /// </summary>
         public List<Chunk> GetChunksInRadius(int centerChunkX, int centerChunkZ, int radius)
         {
-            var chunks = new List<Chunk>();
-
+            // Collect all (x, z) positions sorted by distance from center (closest first)
+            // so the spawn chunk and near chunks are sent to the client before far ones.
+            var positions = new List<(int dx, int dz, int distSq)>();
             for (int x = centerChunkX - radius; x <= centerChunkX + radius; x++)
             {
                 for (int z = centerChunkZ - radius; z <= centerChunkZ + radius; z++)
                 {
-                    chunks.Add(GetOrGenerateChunk(x, z));
+                    int dx = x - centerChunkX;
+                    int dz = z - centerChunkZ;
+                    positions.Add((x, z, dx * dx + dz * dz));
                 }
             }
+            positions.Sort((a, b) => a.distSq.CompareTo(b.distSq));
+
+            var chunks = new List<Chunk>(positions.Count);
+            foreach (var (x, z, _) in positions)
+                chunks.Add(GetOrGenerateChunk(x, z));
 
             Log.Debug("Generated/loaded {Count} chunks around ({CenterX}, {CenterZ}) with radius {Radius}",
                 chunks.Count, centerChunkX, centerChunkZ, radius);

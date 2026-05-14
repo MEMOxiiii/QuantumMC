@@ -31,6 +31,10 @@ namespace QuantumMC.Network.Handler
             }
         }
 
+        // In Bedrock Edition, MovePlayerPacket.Position.Y is the eye/camera position
+        // (feet + 1.62 for standing). We store feet Y to keep internal positions consistent.
+        private const float EyeHeight = 1.62f;
+
         private void HandleMovePlayer(PlayerSession session, byte[] payload)
         {
             var stream = new BinaryStream(payload);
@@ -38,7 +42,7 @@ namespace QuantumMC.Network.Handler
             packet.Decode(stream);
 
             session.Player.X = packet.Position.X;
-            session.Player.Y = packet.Position.Y;
+            session.Player.Y = packet.Position.Y - EyeHeight; // convert eye → feet
             session.Player.Z = packet.Position.Z;
             session.Player.Pitch = packet.Pitch;
             session.Player.Yaw = packet.Yaw;
@@ -69,7 +73,7 @@ namespace QuantumMC.Network.Handler
             packet.Decode(stream);
 
             session.Player.X = packet.Position.X;
-            session.Player.Y = packet.Position.Y;
+            session.Player.Y = packet.Position.Y - EyeHeight; // convert eye → feet
             session.Player.Z = packet.Position.Z;
             session.Player.Pitch = packet.Pitch;
             session.Player.Yaw = packet.Yaw;
@@ -77,6 +81,20 @@ namespace QuantumMC.Network.Handler
 
             session.Player.UpdateChunks();
 
+            // Confirm movement prediction so the client's ground-mode physics are not frozen.
+            // Without this, the client waits for server confirmation and movement appears stuck/slow.
+            var correction = new CorrectPlayerMovePredictionPacket
+            {
+                PredictionType = 0, // player (not vehicle)
+                Position = packet.Position,
+                Delta = packet.Delta,
+                // onGround: true when no significant downward velocity (standing/jumping up)
+                OnGround = packet.Delta.Y >= -0.05f,
+                Tick = packet.Tick
+            };
+            session.SendPacket(correction);
+
+            // Broadcast movement to other players using eye position (packet.Position)
             var broadcastPacket = new MovePlayerPacket
             {
                 RuntimeEntityId = session.Player.EntityRuntimeId,

@@ -20,6 +20,10 @@ namespace QuantumMC.Network.Handler
                 case PacketIds.SetLocalPlayerAsInitialized:
                     HandleSetLocalPlayerAsInitialized(session, payload);
                     break;
+
+                case PacketIds.ServerBoundLoadingScreen:
+                    HandleServerBoundLoadingScreen(session, payload);
+                    break;
             }
         }
 
@@ -41,6 +45,8 @@ namespace QuantumMC.Network.Handler
             int grantedRadius = Math.Min(packet.Radius, session.Player.World.MaxChunkRadius);
             session.Player.ChunkRadius = grantedRadius;
 
+            Log.Information("[JOIN] Sending chunks radius={Radius} to {Username}", grantedRadius, session.Username);
+
             var radiusResponse = new ChunkRadiusUpdatedPacket
             {
                 Radius = grantedRadius
@@ -48,6 +54,7 @@ namespace QuantumMC.Network.Handler
             session.SendPacket(radiusResponse);
 
             session.Player.UpdateChunks();
+            Log.Information("[JOIN] Chunks sent, sending PlayerSpawn to {Username}", session.Username);
 
             var spawnStatus = new PlayStatusPacket
             {
@@ -72,6 +79,23 @@ namespace QuantumMC.Network.Handler
 
             session.State = SessionState.InGamePhase;
             session.Player.SendCommandData();
+        }
+
+        private void HandleServerBoundLoadingScreen(PlayerSession session, byte[] payload)
+        {
+            // Protocol 975 (MC 1.26.20): packet fields are
+            //   [0] Loading Screen Packet Type (VarInt zigzag-encoded int32):
+            //       wire 0 = StartLoadingScreen, wire 2 = EndLoadingScreen (decoded value 1)
+            //   [1] Loading Screen Id (uint32 LE): always 0 for initial world load.
+            //
+            // The server must NOT respond to either packet type for initial world load.
+            // Sending PlayStatus(PlayerSpawn) again here causes the client to disconnect
+            // immediately because it receives a duplicate spawn signal while already loaded.
+            // After EndLoadingScreen the client will send SetLocalPlayerAsInitialized on its own.
+            var stream = new BinaryStream(payload);
+            uint type = stream.ReadUnsignedVarInt();
+            string typeName = type == 0 ? "StartLoadingScreen" : type == 2 ? "EndLoadingScreen" : $"Unknown({type})";
+            Log.Information("[JOIN] ServerboundLoadingScreen {TypeName} (raw={Type}) from {Username}", typeName, type, session.Username);
         }
     }
 }
