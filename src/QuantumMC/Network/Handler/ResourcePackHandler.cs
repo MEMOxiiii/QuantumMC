@@ -164,6 +164,13 @@ namespace QuantumMC.Network.Handler
             session.SendPacket(new AvailableActorIdentifiersPacket { SerialisedEntityIdentifiers = LoadEmbeddedResource("entity_identifiers.nbt") });
             Log.Information("[JOIN] Sent BiomeDefinitionList + AvailableActorIdentifiers");
 
+            // CameraPresetsPacket is required since MC 1.20.60 (protocol ~671).
+            // TrimDataPacket is required since MC 1.20.10.
+            // Both must be sent before PlayStatus(PlayerSpawn); empty lists are valid.
+            session.SendPacket(new CameraPresetsPacket());
+            session.SendPacket(new TrimDataPacket());
+            Log.Information("[JOIN] Sent CameraPresets + TrimData");
+
             bool isCreative = session.Player.Gamemode == 1;
 
             // Survival: basic interactions + walk/fly speed values
